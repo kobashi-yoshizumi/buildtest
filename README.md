@@ -1,6 +1,6 @@
 # CDK CI README Sample
 
-test22222222
+test2222
 
 This stack creates:
 - S3 (source): ci-source-buildtest-dummy
