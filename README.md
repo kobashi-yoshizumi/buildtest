@@ -1,6 +1,6 @@
 # CDK CI README Sample
 
-test1
+test2
 
 This stack creates:
 - S3 (source): ci-source-buildtest-kobashi

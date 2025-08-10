@@ -1,0 +1,126 @@
+name: advisory-scan-and-release
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  pr-scan:
+    name: Security Scan (advisory)
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # CodeQL は Public リポジトリでのみ実行（Private でも GHAS ありなら通ります）
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- CodeQL（Publicのみ/Privateなら自動スキップ） ---
+      - name: Initialize CodeQL
+        if: ${{ !github.event.repository.private }}
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Autobuild
+        if: ${{ !github.event.repository.private }}
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        if: ${{ !github.event.repository.private }}
+        uses: github/codeql-action/analyze@v3
+        continue-on-error: true   # 警告のみ
+
+      # --- Trivy（リポジトリ全体を走査） ---
+      - name: Trivy fs scan
+        id: trivy
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: fs
+          ignore-unfixed: true
+          format: table
+          exit-code: '1'                # 検出があれば本来失敗
+          severity: 'CRITICAL,HIGH'
+        continue-on-error: true         # ただしワークフローは成功扱い
+
+      # --- Gitleaks（秘密情報の混入検出） ---
+      - name: Gitleaks
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --redact
+        continue-on-error: true
+
+      # 失敗があれば PR にコメント（ただしジョブ自体は成功で終える）
+      - name: Comment summary to PR
+        if: ${{ steps.trivy.outcome == 'failure' || steps.gitleaks.outcome == 'failure' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context, getOctokit } = require('@actions/github');
+            const github = getOctokit(process.env.GITHUB_TOKEN);
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            let notes = [];
+            if (process.env.TRIVY_OUTCOME === 'failure') notes.push('• Trivy: findings detected (>= HIGH).');
+            if (process.env.GITLEAKS_OUTCOME === 'failure') notes.push('• Gitleaks: potential secrets detected.');
+            const body = [
+              '⚠️ **Advisory security findings** (merge allowed).',
+              notes.join('\n') || 'No details.',
+              '',
+              `Details: ${runUrl}`,
+              '',
+              'You may override and merge, but please review the report.'
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner, repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          GITLEAKS_OUTCOME: ${{ steps.gitleaks.outcome }}
+
+  release:
+    name: Release to S3 (always on main)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ap-northeast-1
+      SOURCE_BUCKET: ci-source-buildtest-kobashi
+      CODEBUILD_PROJECT: deploy-readme-s3
+      ROLE_TO_ASSUME: arn:aws:iam::312556765073:role/GitHubActionsRole-buildtest-kobashi
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare source.zip
+        run: |
+          mkdir bundle
+          cp README.md bundle/
+          (cd bundle && zip -r ../source.zip .)
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+
+      - name: Upload source.zip to S3
+        run: aws s3 cp source.zip s3://${{ env.SOURCE_BUCKET }}/source.zip
+
+      - name: Start CodeBuild
+        run: aws codebuild start-build --project-name "${{ env.CODEBUILD_PROJECT }}"
