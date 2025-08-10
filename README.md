@@ -3,10 +3,10 @@
 test22222222
 
 This stack creates:
-- S3 (source): ci-source-buildtest-kobashi
-- S3 (target): readme-deploy-buildtest-kobashi
+- S3 (source): ci-source-buildtest-dummy
+- S3 (target): readme-deploy-buildtest-dummy
 - CodeBuild project: deploy-readme-s3
-- IAM Role for GitHub Actions (OIDC): GitHubActionsRole-buildtest-kobashi
+- IAM Role for GitHub Actions (OIDC): GitHubActionsRole-buildtest-dummy
 
 GitHub: kobashi-yoshizumi/buildtest (branch: main)
 

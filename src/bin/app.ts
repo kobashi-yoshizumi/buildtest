@@ -8,5 +8,5 @@ new CiStack(app, 'CiReadmeStack', {
   githubOwner: 'kobashi-yoshizumi',
   githubRepo: 'buildtest',
   githubBranch: 'main',
-  suffix: 'buildtest-kobashi'
+  suffix: 'buildtest-dummy'
 });

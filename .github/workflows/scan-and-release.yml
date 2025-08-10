@@ -99,9 +99,9 @@ jobs:
       contents: read
     env:
       AWS_REGION: ap-northeast-1
-      SOURCE_BUCKET: ci-source-buildtest-kobashi
+      SOURCE_BUCKET: ci-source-buildtest-dummy
       CODEBUILD_PROJECT: deploy-readme-s3
-      ROLE_TO_ASSUME: arn:aws:iam::312556765073:role/GitHubActionsRole-buildtest-kobashi
+      ROLE_TO_ASSUME: arn:aws:iam::312556765073:role/GitHubActionsRole-buildtest-dummy
 
     steps:
       - name: Checkout
