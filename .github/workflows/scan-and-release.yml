@@ -2,30 +2,27 @@ name: advisory-scan-and-release
 
 on:
   pull_request:
-    branches: ["main"]
-    types: [opened, synchronize, reopened, ready_for_review]  # ← 追加
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened ]
   push:
-    branches: ["main"]
-  workflow_dispatch: {}  # ← 手動トリガー
+    branches: [ "main" ]
 
 jobs:
   pr-scan:
     name: Security Scan (advisory)
-    # if: ${{ github.event_name == 'pull_request' }}  ← 一旦外して様子見してもOK
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+      pull-requests: write
 
     steps:
-      - name: Debug event payload
-        run: |
-          echo "event_name=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          echo "base_ref=${{ github.base_ref }}"
-          echo "head_ref=${{ github.head_ref }}"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # gitleaks用に履歴を取得
 
       # --- CodeQL（Publicのみ/Privateなら自動スキップ） ---
       - name: Initialize CodeQL
