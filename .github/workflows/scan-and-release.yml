@@ -3,7 +3,7 @@ name: advisory-scan-and-release
 on:
   pull_request:
     branches: [ "main" ]
-    types: [opened, synchronize, reopened]
+    types: [ opened, synchronize, reopened ]
   push:
     branches: [ "main" ]
 
@@ -15,12 +15,14 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      issues: write            # ← コメント用
-      pull-requests: write     # ← どちらか片方でもOK
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks用に履歴を取得
 
       # --- CodeQL（Publicのみ/Privateなら自動スキップ） ---
       - name: Initialize CodeQL
@@ -36,7 +38,7 @@ jobs:
       - name: Analyze
         if: ${{ !github.event.repository.private }}
         uses: github/codeql-action/analyze@v3
-        continue-on-error: true   # 警告のみ
+        continue-on-error: true   # 警告扱い
 
       # --- Trivy（リポジトリ全体を走査） ---
       - name: Trivy fs scan
@@ -46,39 +48,52 @@ jobs:
           scan-type: fs
           ignore-unfixed: true
           format: table
-          exit-code: '1'                # 検出があれば本来失敗
+          exit-code: '1'                # 検出あれば failure
           severity: 'CRITICAL,HIGH'
-        continue-on-error: true         # ただしワークフローは成功扱い
+        continue-on-error: true         # ここでは止めない
+        if: always()
+
+      # --- gitleaks 用の比較レンジ設定（PR） ---
+      - name: Set range for PR
+        run: |
+          echo "BASE=${{ github.event.pull_request.base.sha }}" >> $GITHUB_ENV
+          echo "HEAD=${{ github.sha }}" >> $GITHUB_ENV
+          git fetch origin ${{ github.event.pull_request.base.sha }} --depth=1 || true
+        if: always()
 
       # --- Gitleaks（秘密情報の混入検出） ---
       - name: Gitleaks
         id: gitleaks
         uses: gitleaks/gitleaks-action@v2
+        with:
+          args: >
+            detect --redact
+            --log-opts="--first-parent --no-merges ${BASE}..${HEAD}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --redact
         continue-on-error: true
+        if: always()
 
-      # 失敗があれば PR にコメント（ただしジョブ自体は成功で終える）
+      # --- 結果コメント（赤でもマージ可のアドバイザリ文言） ---
       - name: Comment summary to PR
-        if: ${{ steps.trivy.conclusion == 'failure' || steps.gitleaks.conclusion == 'failure' }}
         uses: actions/github-script@v7
+        if: always()
         with:
           script: |
-            // github, context は注入済み（actions/github-script）
             const { owner, repo } = context.repo;
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const trivy = process.env.TRIVY_OUTCOME || 'success';
+            const gl    = process.env.GITLEAKS_OUTCOME || 'success';
             let notes = [];
-            if (process.env.TRIVY_OUTCOME === 'failure') notes.push('• Trivy: findings detected (>= HIGH).');
-            if (process.env.GITLEAKS_OUTCOME === 'failure') notes.push('• Gitleaks: potential secrets detected.');
+            if (trivy === 'failure')   notes.push('• Trivy: findings detected (>= HIGH).');
+            if (gl === 'failure')      notes.push('• Gitleaks: potential secrets detected.');
             const body = [
               '⚠️ **Advisory security findings** (merge allowed).',
-              notes.join('\n') || 'No details.',
+              notes.length ? notes.join('\n') : 'No details.',
               '',
               `Details: ${runUrl}`,
               '',
-              'You may override and merge, but please review the report.'
+              'Merging is allowed, but please review the report.'
             ].join('\n');
             await github.rest.issues.createComment({
               owner, repo,
@@ -89,6 +104,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIVY_OUTCOME: ${{ steps.trivy.conclusion }}
           GITLEAKS_OUTCOME: ${{ steps.gitleaks.conclusion }}
+
+      # --- 最終判定：どれか失敗なら exit 1（ジョブを赤にする） ---
+      - name: Mark job as advisory failure (red UI)
+        if: always()
+        run: |
+          fail=0
+          [ "${{ steps.trivy.conclusion }}"    = "failure" ] && fail=1
+          [ "${{ steps.gitleaks.conclusion }}" = "failure" ] && fail=1
+          if [ $fail -eq 1 ]; then
+            echo "Advisory findings present; marking job as failed (red)."
+            exit 1
+          else
+            echo "No advisory findings; job remains green."
+          fi
 
   release:
     name: Release to S3 (always on main)
