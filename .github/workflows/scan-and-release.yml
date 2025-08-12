@@ -39,6 +39,7 @@ jobs:
         if: ${{ !github.event.repository.private }}
         uses: github/codeql-action/analyze@v3
         continue-on-error: true   # 警告扱い
+        if: always()
 
       # --- Trivy（リポジトリ全体を走査） ---
       - name: Trivy fs scan
@@ -48,7 +49,7 @@ jobs:
           scan-type: fs
           ignore-unfixed: true
           format: table
-          exit-code: '1'                # 検出あれば failure
+          exit-code: '1'                # 検出あれば非ゼロ
           severity: 'CRITICAL,HIGH'
         continue-on-error: true         # ここでは止めない
         if: always()
@@ -74,7 +75,7 @@ jobs:
         continue-on-error: true
         if: always()
 
-      # --- 結果コメント（赤でもマージ可のアドバイザリ文言） ---
+      # --- 結果コメント（アドバイザリ文言） ---
       - name: Comment summary to PR
         uses: actions/github-script@v7
         if: always()
@@ -102,16 +103,18 @@ jobs:
             });
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_OUTCOME: ${{ steps.trivy.conclusion }}
-          GITLEAKS_OUTCOME: ${{ steps.gitleaks.conclusion }}
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          GITLEAKS_OUTCOME: ${{ steps.gitleaks.outcome }}
 
       # --- 最終判定：どれか失敗なら exit 1（ジョブを赤にする） ---
       - name: Mark job as advisory failure (red UI)
         if: always()
         run: |
+          echo "Trivy outcome:    ${{ steps.trivy.outcome }}"
+          echo "Gitleaks outcome: ${{ steps.gitleaks.outcome }}"
           fail=0
-          [ "${{ steps.trivy.conclusion }}"    = "failure" ] && fail=1
-          [ "${{ steps.gitleaks.conclusion }}" = "failure" ] && fail=1
+          [ "${{ steps.trivy.outcome }}"    = "failure" ] && fail=1
+          [ "${{ steps.gitleaks.outcome }}" = "failure" ] && fail=1
           if [ $fail -eq 1 ]; then
             echo "Advisory findings present; marking job as failed (red)."
             exit 1
