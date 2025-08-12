@@ -3,6 +3,7 @@ import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import * as logs from 'aws-cdk-lib/aws-logs';        // ★ 追加
 
 interface CiStackProps extends cdk.StackProps {
   githubOwner: string;
@@ -17,6 +18,7 @@ export class CiStack extends cdk.Stack {
 
     const sourceBucketName = `ci-source-${props.suffix}`;
     const targetBucketName = `readme-deploy-${props.suffix}`;
+    const projectName = 'deploy-readme-s3';          // ★ プロジェクト名を変数化
 
     const sourceBucket = new s3.Bucket(this, 'SourceBucket', {
       bucketName: sourceBucketName,
@@ -54,8 +56,16 @@ export class CiStack extends cdk.Stack {
       resources: [targetBucket.bucketArn, `${targetBucket.bucketArn}/*`]
     }));
 
+    // ★ CodeBuild 用の専用 LogGroup（保持期間はお好みで）
+    const cbLogGroup = logs.LogGroup.fromLogGroupName(
+      this,
+      'DeployReadmeLogGroup',
+      `/aws/codebuild/${projectName}`,
+    );
+
+    // CodeBuild Project
     const project = new codebuild.Project(this, 'DeployReadmeProject', {
-      projectName: 'deploy-readme-s3',
+      projectName,
       role: cbRole,
       source: codebuild.Source.s3({
         bucket: sourceBucket,
@@ -68,6 +78,13 @@ export class CiStack extends cdk.Stack {
           TARGET_BUCKET: { value: targetBucket.bucketName }
         }
       },
+      // ★ CloudWatch Logs へ明示的に出力
+      logging: {
+        cloudWatch: {
+          enabled: true,
+          logGroup: cbLogGroup
+        }
+      },
       buildSpec: codebuild.BuildSpec.fromObject({
         version: '0.2',
         phases: {
@@ -75,12 +92,34 @@ export class CiStack extends cdk.Stack {
             commands: [
               'echo "Deploy README.md to S3"',
               'test -f README.md',
-              'aws s3 cp README.md s3://$TARGET_BUCKET/README.md'
+              'aws s3 cp README.md s3://$TARGET_BUCKET/README.md',
+              'echo "SUCCESS: README.md deployed"' // ★ 成功行を明示的に出す
             ]
           }
         },
         artifacts: { files: ['README.md'] }
       })
+    });
+
+    // ★ コンソールで見やすくするための Metric Filter（アラームは作らない）
+    //   ERROR 検出（エラー行を 1 としてカウント）
+    new logs.MetricFilter(this, 'CbErrorFilter', {
+      logGroup: cbLogGroup,
+      metricNamespace: 'Ci/CodeBuild',
+      metricName: 'ErrorCount',
+      filterPattern: logs.FilterPattern.anyTerm('ERROR','Error','error','FAIL','Failed','Failure'),
+      metricValue: '1',
+      defaultValue: 0
+    });
+
+    //   SUCCESS 検出（成功行を 1 としてカウント）
+    new logs.MetricFilter(this, 'CbSuccessFilter', {
+      logGroup: cbLogGroup,
+      metricNamespace: 'Ci/CodeBuild',
+      metricName: 'SuccessCount',
+      filterPattern: logs.FilterPattern.anyTerm('SUCCESS','Succeeded','SUCCEEDED','BUILD SUCCESS'),
+      metricValue: '1',
+      defaultValue: 0
     });
 
     const oidcProviderArn = `arn:aws:iam::${cdk.Stack.of(this).account}:oidc-provider/token.actions.githubusercontent.com`;
@@ -116,5 +155,6 @@ export class CiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'TargetBucketName', { value: targetBucket.bucketName });
     new cdk.CfnOutput(this, 'CodeBuildProjectName', { value: project.projectName });
     new cdk.CfnOutput(this, 'GithubActionsRoleArn', { value: ghaRole.roleArn });
+    new cdk.CfnOutput(this, 'CodeBuildLogGroupName', { value: cbLogGroup.logGroupName }); // ★ 追加
   }
 }
