@@ -1,160 +1,25 @@
-name: advisory-scan-and-release
+name: advisory-scan-demo
 
 on:
   pull_request:
-    branches: [ "main" ]
-    types: [ opened, synchronize, reopened ]
-  push:
-    branches: [ "main" ]
+    branches: ['*']
 
 jobs:
   pr-scan:
     name: Security Scan (advisory)
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
-      issues: write
-      pull-requests: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # gitleaks用に履歴を取得
-
-      # --- CodeQL（Publicのみ/Privateなら自動スキップ） ---
-      - name: Initialize CodeQL
-        if: ${{ !github.event.repository.private }}
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-
-      - name: Autobuild
-        if: ${{ !github.event.repository.private }}
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Analyze
-        id: codeql                 # ← 追加（結論を参照するため）
-        if: ${{ !github.event.repository.private }}
-        uses: github/codeql-action/analyze@v3
-        continue-on-error: true    # 警告扱い
-
-      # --- Trivy（リポジトリ全体を走査） ---
-      - name: Trivy fs scan
-        id: trivy
-        uses: aquasecurity/trivy-action@0.20.0
-        with:
-          scan-type: fs
-          ignore-unfixed: true
-          format: table
-          exit-code: '1'                # 検出あれば failure
-          severity: 'CRITICAL,HIGH'
-        continue-on-error: true         # ここでは止めない
-        if: always()
-
-      # --- gitleaks 用の比較レンジ設定（PR） ---
-      - name: Set range for PR
+      - name: Fake vulnerability scan (always fail)
         run: |
-          echo "BASE=${{ github.event.pull_request.base.sha }}" >> $GITHUB_ENV
-          echo "HEAD=${{ github.sha }}" >> $GITHUB_ENV
-          git fetch origin ${{ github.event.pull_request.base.sha }} --depth=1 || true
-        if: always()
-
-      # --- Gitleaks（秘密情報の混入検出） ---
-      - name: Gitleaks
-        id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: >
-            detect --redact
-            --log-opts="--first-parent --no-merges ${BASE}..${HEAD}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-        if: always()
-
-      # --- 結果コメント（赤でもマージ可のアドバイザリ文言） ---
-      - name: Comment summary to PR
-        uses: actions/github-script@v7
-        if: always()
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const trivy  = process.env.TRIVY_OUTCOME   || 'success';
-            const gl     = process.env.GITLEAKS_OUTCOME|| 'success';
-            const codeql = process.env.CODEQL_OUTCOME  || 'success';
-            let notes = [];
-            if (codeql === 'failure') notes.push('• CodeQL: findings detected.');
-            if (trivy  === 'failure') notes.push('• Trivy: findings detected (>= HIGH).');
-            if (gl     === 'failure') notes.push('• Gitleaks: potential secrets detected.');
-            const body = [
-              '⚠️ **Advisory security findings** (merge allowed).',
-              notes.length ? notes.join('\n') : 'No details.',
-              '',
-              `Details: ${runUrl}`,
-              '',
-              'Merging is allowed, but please review the report.'
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner, repo,
-              issue_number: context.payload.pull_request.number,
-              body
-            });
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_OUTCOME:   ${{ steps.trivy.conclusion }}
-          GITLEAKS_OUTCOME:${{ steps.gitleaks.conclusion }}
-          CODEQL_OUTCOME:  ${{ steps.codeql.conclusion }}
-
-      # --- 最終判定：どれか失敗なら exit 1（ジョブを赤にする） ---
-      - name: Mark job as advisory failure (red UI)
-        if: always()
-        run: |
-          fail=0
-          [ "${{ steps.trivy.conclusion }}"   = "failure" ] && fail=1
-          [ "${{ steps.gitleaks.conclusion }}" = "failure" ] && fail=1
-          [ "${{ steps.codeql.conclusion }}"   = "failure" ] && fail=1
-          if [ $fail -eq 1 ]; then
-            echo "Advisory findings present; marking job as failed (red)."
-            exit 1
-          else
-            echo "No advisory findings; job remains green."
-          fi
-
-  release:
-    name: Release to S3 (always on main)
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      AWS_REGION: ap-northeast-1
-      SOURCE_BUCKET: ci-source-buildtest-dummy
-      CODEBUILD_PROJECT: deploy-readme-s3
-      ROLE_TO_ASSUME: arn:aws:iam::312556765073:role/GitHubActionsRole-buildtest-dummy
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Prepare source.zip
-        run: |
-          mkdir bundle
-          cp README.md bundle/
-          (cd bundle && zip -r ../source.zip .)
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
-
-      - name: Upload source.zip to S3
-        run: aws s3 cp source.zip s3://${{ env.SOURCE_BUCKET }}/source.zip
-
-      - name: Start CodeBuild
-        run: aws codebuild start-build --project-name "${{ env.CODEBUILD_PROJECT }}"
+          echo "Running fake vulnerability scan (demo)..."
+          echo "::group::Findings"
+          echo "::error title=Trivy(HIGH)::CVE-0000-0000 in package xyz (fake)"
+          echo "::error title=Gitleaks::Potential secret in .env (fake)"
+          echo "::endgroup::"
+          echo "## Advisory Security Report" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy: 1 HIGH (fake)" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: 1 potential secret (fake)" >> $GITHUB_STEP_SUMMARY
+          sleep 5  # 進行中の見た目を少し作る
+          exit 1   # 常に失敗＝赤バツ
