@@ -36,9 +36,10 @@ jobs:
         uses: github/codeql-action/autobuild@v3
 
       - name: Analyze
+        id: codeql                 # ← 追加（結論を参照するため）
         if: ${{ !github.event.repository.private }}
         uses: github/codeql-action/analyze@v3
-        continue-on-error: true   # 警告扱い
+        continue-on-error: true    # 警告扱い
 
       # --- Trivy（リポジトリ全体を走査） ---
       - name: Trivy fs scan
@@ -82,11 +83,13 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const trivy = process.env.TRIVY_OUTCOME || 'success';
-            const gl    = process.env.GITLEAKS_OUTCOME || 'success';
+            const trivy  = process.env.TRIVY_OUTCOME   || 'success';
+            const gl     = process.env.GITLEAKS_OUTCOME|| 'success';
+            const codeql = process.env.CODEQL_OUTCOME  || 'success';
             let notes = [];
-            if (trivy === 'failure')   notes.push('• Trivy: findings detected (>= HIGH).');
-            if (gl === 'failure')      notes.push('• Gitleaks: potential secrets detected.');
+            if (codeql === 'failure') notes.push('• CodeQL: findings detected.');
+            if (trivy  === 'failure') notes.push('• Trivy: findings detected (>= HIGH).');
+            if (gl     === 'failure') notes.push('• Gitleaks: potential secrets detected.');
             const body = [
               '⚠️ **Advisory security findings** (merge allowed).',
               notes.length ? notes.join('\n') : 'No details.',
@@ -102,16 +105,18 @@ jobs:
             });
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_OUTCOME: ${{ steps.trivy.conclusion }}
-          GITLEAKS_OUTCOME: ${{ steps.gitleaks.conclusion }}
+          TRIVY_OUTCOME:   ${{ steps.trivy.conclusion }}
+          GITLEAKS_OUTCOME:${{ steps.gitleaks.conclusion }}
+          CODEQL_OUTCOME:  ${{ steps.codeql.conclusion }}
 
       # --- 最終判定：どれか失敗なら exit 1（ジョブを赤にする） ---
       - name: Mark job as advisory failure (red UI)
         if: always()
         run: |
           fail=0
-          [ "${{ steps.trivy.conclusion }}"    = "failure" ] && fail=1
+          [ "${{ steps.trivy.conclusion }}"   = "failure" ] && fail=1
           [ "${{ steps.gitleaks.conclusion }}" = "failure" ] && fail=1
+          [ "${{ steps.codeql.conclusion }}"   = "failure" ] && fail=1
           if [ $fail -eq 1 ]; then
             echo "Advisory findings present; marking job as failed (red)."
             exit 1
